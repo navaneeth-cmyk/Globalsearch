@@ -1,80 +1,73 @@
 /* eslint-disable no-unused-vars */
+/* eslint-disable react-hooks/static-components */
 import React from "react";
 import { Outlet } from "react-router-dom";
 import {
   UserCircle,
-  Book,
-  LogOut,
   LayoutGrid,
-  List,
+  LogOut,
   Settings,
-  Upload,
+  GraduationCap,
+  CheckCircle,
+  UserPlus,
+  Users,
   Menu,
+  Award,
   MessageSquare,
-  Trophy,
-  Code,
 } from "lucide-react";
 import markLogo from "../../../assets/just_logo.jpeg";
 import { useNavigate } from "react-router-dom";
 
-const NavItem = ({ path, icon: Icon, label, badgeCount=0, handleNavigate, location, setIsSidebarOpen }) => {
-  const isActive = location.pathname.includes(path);
-
-  return (
-    <li
-      className={`flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 mt-1
-                  ${isActive
-          ? "bg-primary-900 text-white shadow-md"
-          : "text-slate-600 hover:bg-slate-100"
-        }`}
-      onClick={() => {
-        handleNavigate(`/instructor/${path}`);
-        setIsSidebarOpen(false);
-      }}
-    >
-      <div className="flex items-center gap-3 w-full">
-        <Icon className={isActive ? "text-white" : "text-slate-500"} />
-        <span className="font-medium flex-1">{label}</span>
-        {badgeCount > 0 && (
-          <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full shadow-sm">
-            {badgeCount}
-          </span>
-        )}
-      </div>
-    </li>
-  );
-};
-
-const InstructorLayoutView = ({
-  InstructorName,
+const AdminLayoutView = ({
   isSidebarOpen,
   setIsSidebarOpen,
   handleLogout,
-  totalUnread,
+  adminName,
   handleNavigate,
   location,
   photoURL,
 }) => {
   const navigate = useNavigate();
 
+  const NavItem = ({ path, icon: Icon, label }) => {
+    const isActive = location.pathname.includes(path);
+    return (
+      <li
+        className={`flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 mt-1
+                    ${
+                      isActive
+                        ? "bg-primary-900 text-white shadow-md"
+                        : "text-slate-600 hover:bg-slate-100"
+                    }`}
+        onClick={() => {
+          handleNavigate(`/admin/${path}`);
+          setIsSidebarOpen(false);
+        }}
+      >
+        <Icon className={isActive ? "text-white" : "text-slate-500"} />
+        <span className="font-medium">{label}</span>
+      </li>
+    );
+  };
+
   return (
     <div className="flex min-h-screen bg-slate-50 font-sans text-primary-900">
-      { }
+      {}
       {isSidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm"
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden backdrop-blur-sm transition-opacity"
           onClick={() => setIsSidebarOpen(false)}
         />
       )}
 
-      { }
+      {}
       <div
         className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 shadow-xl lg:shadow-none transform transition-transform duration-300 ease-in-out
                 ${isSidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
             `}
       >
         <div className="flex flex-col h-full">
-          { }
+          {}
           <div className="flex items-center gap-3 p-6 border-b border-slate-100">
             <img
               src={markLogo}
@@ -91,65 +84,71 @@ const InstructorLayoutView = ({
             </div>
           </div>
 
-          { }
+          {}
           <div className="flex-1 overflow-y-auto py-6 px-4 scrollbar-thin scrollbar-thumb-slate-200">
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 px-2">
-              Academic Ops
+              Main Menu
             </div>
             <ul className="mb-8">
-              <NavItem path="dashboard" icon={LayoutGrid} label="Dashboard" handleNavigate={handleNavigate} location={location} setIsSidebarOpen={setIsSidebarOpen} />
-              <NavItem path="add-course" icon={Upload} label="Add Course" handleNavigate={handleNavigate} location={location} setIsSidebarOpen={setIsSidebarOpen} />
+              <NavItem path="dashboard" icon={LayoutGrid} label="Dashboard" />
+              <NavItem
+                path="add-instructor"
+                icon={GraduationCap}
+                label="Add Instructor"
+              />
+              <NavItem
+                path="add-student"
+                icon={UserPlus}
+                label="Add Student"
+              />
             </ul>
 
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 px-2">
               Management
             </div>
             <ul className="mb-8">
-              <NavItem path="courses" icon={List} label="My Courses" handleNavigate={handleNavigate} location={location} setIsSidebarOpen={setIsSidebarOpen} />
-              <NavItem path="practice" icon={Code} label="Practice Arena" handleNavigate={handleNavigate} location={location} setIsSidebarOpen={setIsSidebarOpen} />
-              <NavItem path="contests" icon={Trophy} label="Manage Contests" handleNavigate={handleNavigate} location={location} setIsSidebarOpen={setIsSidebarOpen} />
-              <NavItem path="exams" icon={Book} label="Exams" handleNavigate={handleNavigate} location={location} setIsSidebarOpen={setIsSidebarOpen} />
               <NavItem
-                path="chat"
+                path="approve-users"
+                icon={UserCircle}
+                label="Approve Users"
+              />
+              <NavItem path="manage-users" icon={Users} label="Manage Users" />
+              <NavItem path="groups" icon={Users} label="Groups" />
+              <NavItem
+                path="assign-course"
+                icon={UserPlus}
+                label="Assign Courses"
+              />
+              <NavItem
+                path="approve-courses"
+                icon={CheckCircle}
+                label="Approve Courses"
+              />
+                <NavItem
+                path="chat-students"
                 icon={MessageSquare}
-                label="Messages"
-                badgeCount={totalUnread}
-                handleNavigate={handleNavigate}
-                location={location}
-                setIsSidebarOpen={setIsSidebarOpen}
+                label="Chat with Students"
               />
-            </ul>
-
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 px-2">
-              Settings
-            </div>
-            <ul className="mb-8">
-              <NavItem
-                path="settings"
-                icon={Settings}
-                label="Settings"
-                handleNavigate={handleNavigate}
-                location={location}
-                setIsSidebarOpen={setIsSidebarOpen}
-              />
+              <NavItem path="certificates" icon={Award} label="Certificates" />
+              <NavItem path="settings" icon={Settings} label="Settings" />
             </ul>
           </div>
         </div>
       </div>
 
-      { }
+      {}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        { }
+        {}
         <header className="bg-white border-b border-slate-200 h-16 px-4 lg:px-8 flex items-center justify-between shadow-sm sticky top-0 z-30">
           <div className="flex items-center gap-4">
             <button
-              className="lg:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg"
+              className="lg:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             >
               <Menu className="text-xl" />
             </button>
             <h2 className="text-xl font-semibold text-primary-900 hidden sm:block">
-              Instructor Dashboard
+              Admin Console
             </h2>
           </div>
 
@@ -157,17 +156,17 @@ const InstructorLayoutView = ({
             <div className="flex items-center gap-3 pl-4 border-l border-slate-200">
               <div className="text-right hidden md:block">
                 <div className="text-sm font-semibold text-primary-900">
-                  {InstructorName}
+                  {adminName}
                 </div>
                 <div className="text-xs text-slate-500 font-medium">
-                  Instructor
+                  Super Admin
                 </div>
               </div>
               <div
                 onClick={() => navigate("settings")}
                 className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center 
-                                text-slate-400 border border-slate-200 overflow-hidden 
-                                cursor-pointer hover:ring-2 hover:ring-indigo-500 transition"
+             text-slate-400 border border-slate-200 overflow-hidden 
+             cursor-pointer hover:ring-2 hover:ring-indigo-500 transition"
               >
                 {photoURL ? (
                   <img
@@ -179,6 +178,7 @@ const InstructorLayoutView = ({
                   <UserCircle className="w-full h-full p-1" />
                 )}
               </div>
+
               <button
                 onClick={handleLogout}
                 className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all duration-200"
@@ -190,7 +190,7 @@ const InstructorLayoutView = ({
           </div>
         </header>
 
-        { }
+        {}
         <main className="flex-1 overflow-auto bg-slate-50 p-4 lg:p-8">
           <div className="w-full h-full">
             <Outlet />
@@ -201,4 +201,4 @@ const InstructorLayoutView = ({
   );
 };
 
-export default InstructorLayoutView;
+export default AdminLayoutView;
