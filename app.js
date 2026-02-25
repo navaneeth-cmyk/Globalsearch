@@ -2,7 +2,8 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import pool from "./db/postgres.js";
-import { initializeSocket } from "./services/socket.js";
+import admin from "firebase-admin";
+import { autoSubmitExam } from "./controllers/exams/exam.controller.js";
 
 import authRoutes from "./routes/auth.routes.js";
 import usersRoutes from "./routes/users.routes.js";
@@ -13,7 +14,6 @@ import adminRoutes from "./routes/admin.routes.js";
 import studentCoursesRoutes from "./routes/studentCourses.routes.js";
 import examRoutes from "./routes/exam.routes.js";
 import studentExamRoutes from "./routes/studentExam.routes.js";
-
 import uploadRoutes from "./routes/upload.routes.js";
 import chatRoutes from "./routes/chat.routes.js";
 import groupsRoutes from "./routes/group.routes.js";
@@ -23,13 +23,14 @@ import http from "http";
 import { Server } from "socket.io";
 import { initChatTables, serveFile } from "./controllers/chat.controller.js";
 import botRoutes from "./routes/bot.routes.js";
-import reviewroutes from "./routes/reviews.routes.js";
-import certificateRoutes from "./routes/certificate.routes.js";
+import reviewroutes from "./routes/reviews.routes.js"
+import certificateRoutes from "./routes/certificate.routes.js"
 import contestRoutes from "./routes/contest.routes.js";
 import contestQuestionRoutes from "./routes/contestQuestion.routes.js";
 import contestAdvancedRoutes from "./routes/contestAdvanced.routes.js";
-import mocktestRoutes from "./routes/mocktest.routes.js";
 import { router as admingroupsRoutes } from "./routes/admingroups.routes.js";
+import courseCommentsRoutes from "./routes/courseComments.routes.js";
+
 
 const app = express();
 app.set("trust proxy", 1);
@@ -43,9 +44,42 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
+  pingInterval: 5000,
+  pingTimeout: 8000,
 });
 global.io = io;
 
+/* =====================================
+   🔐 SOCKET AUTH MIDDLEWARE
+   Verify Firebase Token
+===================================== */
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+
+    if (!token) {
+      return next();
+    }
+
+    const decoded = await admin.auth().verifyIdToken(token);
+
+    const { rows } = await pool.query(
+      `SELECT user_id FROM users WHERE firebase_uid = $1`,
+      [decoded.uid]
+    );
+
+    if (!rows.length) {
+      return next(new Error("User not found in database"));
+    }
+
+    socket.userId = rows[0].user_id;
+    socket.firebaseUid = decoded.uid;
+    next();
+  } catch (err) {
+    console.error("Socket authentication error:", err);
+    next();
+  }
+});
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -70,6 +104,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/admin/groups", groupsRoutes);
 app.use("/api/student", studentCoursesRoutes);
 app.use("/api/exams", examRoutes);
+// Backward-compatible alias for older frontend routes
 app.use("/api/exam", examRoutes);
 app.use("/api/student/exams", studentExamRoutes);
 app.use("/api/chats", chatRoutes);
@@ -77,13 +112,14 @@ app.use("/api/practice", practiceRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/bot", botRoutes);
-app.use("/api/reviews", reviewroutes);
-app.use("/api/certificate", certificateRoutes);
-app.use("/api/contests", contestRoutes);
+app.use("/api/reviews",reviewroutes)
+app.use("/api/certificate",certificateRoutes)
+app.use("/api/contests", contestRoutes)
 app.use("/api/contests", contestQuestionRoutes);
 app.use("/api/contests", contestAdvancedRoutes);
-app.use("/api/mocktest", mocktestRoutes);
 app.use("/api/admingroups", admingroupsRoutes);
+app.use("/api", courseCommentsRoutes);
+
 
 app.get("/", (req, res) => {
   res.send("API is running 🚀");
@@ -95,10 +131,107 @@ const userSockets = new Map();
 
 io.on("connection", (socket) => {
   console.log(`Socket Connected: ${socket.id}`);
+  if (socket.userId) {
+    console.log(`👤 Authenticated user: ${socket.userId}`);
+  }
 
   socket.on("join_user", (userId) => {
     socket.join(`user_${userId}`);
     console.log(`User ${userId} joined room user_${userId}`);
+  });
+
+  /* =========================
+     STUDENT STARTS EXAM
+  ========================= */
+  socket.on("exam:start", async ({ examId }) => {
+    const userId = socket.userId;
+    socket.examId = examId;
+
+    console.log(`📝 User ${userId} started exam ${examId}`);
+    console.log(`🔍 Checking disconnect state for user ${userId}, exam ${examId}`);
+
+    if (!userId || !examId) {
+      console.log(`⚠️ exam:start ignored - no userId or examId`);
+      return;
+    }
+
+    try {
+      console.log(`🔍 Checking if exam ${examId} was auto-submitted for user ${userId}...`);
+      const { rows } = await pool.query(
+        `
+        SELECT ea.status, ea.disconnected_at, ea.end_time, e.disconnect_grace_time
+        FROM exam_attempts ea
+        JOIN exams e ON e.exam_id = ea.exam_id
+        WHERE ea.exam_id = $1 AND ea.student_id = $2
+        `,
+        [examId, userId]
+      );
+
+      console.log(`📊 Query result:`, rows);
+
+      if (rows.length > 0 && rows[0].status === 'submitted') {
+        console.log(`🚨🚨🚨 Exam ${examId} was auto-submitted for user ${userId} during disconnection`);
+        console.log(`📤 Emitting exam:autoSubmitted event to socket ${socket.id}`);
+        
+        socket.emit("exam:autoSubmitted", {
+          examId,
+          message: "Exam was auto-submitted due to disconnection",
+        });
+        
+        console.log(`✅ Event emitted successfully`);
+      } else if (rows.length > 0) {
+        const disconnectedAt = rows[0].disconnected_at;
+        const endTime = rows[0].end_time;
+        const graceSeconds = rows[0].disconnect_grace_time || 0;
+        const { rows: nowRows } = await pool.query(`SELECT NOW() AS now`);
+        const now = nowRows[0].now;
+
+        const deadlineMs = endTime
+          ? new Date(endTime).getTime() + graceSeconds * 1000
+          : null;
+
+        if (deadlineMs && new Date(now).getTime() > deadlineMs) {
+          console.log(`🚨 Attempt exceeded end time. Auto-submitting exam ${examId} for user ${userId}`);
+          await autoSubmitExam(userId, examId);
+          socket.emit("exam:autoSubmitted", {
+            examId,
+            message: "Exam auto-submitted due to time expiry",
+          });
+          return;
+        }
+
+        if (disconnectedAt) {
+          const offlineSeconds = Math.floor((new Date(now).getTime() - new Date(disconnectedAt).getTime()) / 1000);
+
+          console.log(`⏱️ Offline duration: ${offlineSeconds}s (grace ${graceSeconds}s)`);
+
+          if (offlineSeconds > graceSeconds) {
+            console.log(`🚨 Offline grace exceeded. Auto-submitting exam ${examId} for user ${userId}`);
+            await autoSubmitExam(userId, examId);
+            socket.emit("exam:autoSubmitted", {
+              examId,
+              message: "Exam auto-submitted due to disconnection",
+            });
+          } else {
+            await pool.query(
+              `
+              UPDATE exam_attempts
+              SET disconnected_at = NULL
+              WHERE exam_id = $1 AND student_id = $2
+              `,
+              [examId, userId]
+            );
+            console.log(`✅ Reconnected within grace. Cleared disconnected_at.`);
+          }
+        } else {
+          console.log(`✓ Exam ${examId} not yet submitted, continuing normally`);
+        }
+      } else {
+        console.log(`⚠️ No attempt found for exam ${examId}, user ${userId}`);
+      }
+    } catch (err) {
+      console.error("❌ Error checking exam status on reconnect:", err);
+    }
   });
 
   socket.on("join_chat", (chatId) => {
@@ -111,8 +244,9 @@ io.on("connection", (socket) => {
     console.log(`Socket ${socket.id} joined group_${groupId}`);
   });
 
-  // ✅ FIXED: single clean send_message handler with callback
+  // ✅ CHANGE 3: Added callback parameter to send_message handler
   socket.on("send_message", async (data, callback) => {
+
     const {
       chatId,
       groupId,
@@ -128,14 +262,16 @@ io.on("connection", (socket) => {
     } = data;
 
     try {
-      // ─── GROUP MESSAGES ───────────────────────────────────────────
+      // Handle GROUP messages
       if (groupId) {
         const groupCheck = await pool.query(
-          "SELECT 1 FROM admin_groups WHERE group_id = $1",
+          'SELECT 1 FROM admin_groups WHERE group_id = $1',
           [groupId]
         );
+        
         const isAdminGroup = groupCheck.rows.length > 0;
 
+        // ✅ CHANGE 1: Use if/else with correct tables instead of dynamic tableName
         let result;
 
         if (isAdminGroup) {
@@ -144,7 +280,9 @@ io.on("connection", (socket) => {
             `INSERT INTO admin_group_messages (
                 group_id, sender_id, text,
                 attachment_file_id, attachment_type, attachment_name
-             ) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            )
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING *`,
             [
               groupId,
               senderId,
@@ -161,7 +299,9 @@ io.on("connection", (socket) => {
                 group_id, sender_id, text,
                 attachment_file_id, attachment_type, attachment_name,
                 reply_to_message_id
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            )
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING *`,
             [
               groupId,
               senderId,
@@ -175,8 +315,9 @@ io.on("connection", (socket) => {
         }
 
         const savedMsg = result.rows[0];
-        console.log(`✅ ${isAdminGroup ? "Admin" : "College"} group message saved:`, savedMsg);
+        console.log(`✅ ${isAdminGroup ? 'Admin' : 'College'} group message saved:`, savedMsg);
 
+        // ✅ CHANGE 4: Removed sender_role fetch — not included in payload
         const payload = {
           ...savedMsg,
           text: savedMsg.text ?? savedMsg.message ?? text ?? "",
@@ -187,17 +328,22 @@ io.on("connection", (socket) => {
             : null,
         };
 
-        // ✅ Send to all OTHER members in the room
+        // ✅ CHANGE 2: emit "receive_message" instead of "group_message"
+        console.log(
+          "📨 Broadcasting receive_message to group_" +
+            groupId +
+            " (excluding sender)",
+        );
         socket.broadcast.to(`group_${groupId}`).emit("receive_message", payload);
 
-        // ✅ Confirm back to sender so temp message gets replaced with real one
+        // ✅ CHANGE 3: Confirm back to sender so temp message gets replaced
         if (callback) callback(payload);
 
         // Notify all group members except sender
-        const memberTable = isAdminGroup ? "admin_group_members" : "clg_group_members";
+        const memberTable = isAdminGroup ? 'admin_group_members' : 'clg_group_members';
         const membersResult = await pool.query(
           `SELECT user_id FROM ${memberTable} WHERE group_id = $1 AND user_id != $2`,
-          [groupId, senderId]
+          [groupId, senderId],
         );
 
         membersResult.rows.forEach((member) => {
@@ -210,22 +356,25 @@ io.on("connection", (socket) => {
           });
         });
 
-        const groupTable = isAdminGroup ? "admin_groups" : "college_groups";
+        const groupTable = isAdminGroup ? 'admin_groups' : 'college_groups';
         await pool.query(
           `UPDATE ${groupTable} SET updated_at = NOW() WHERE group_id = $1`,
-          [groupId]
+          [groupId],
         );
-
-        console.log(`✅ ${isAdminGroup ? "Admin" : "College"} group message handling complete`);
-
-      // ─── DM MESSAGES ─────────────────────────────────────────────
-      } else if (chatId && recipientId) {
+        console.log(
+          `✅ ${isAdminGroup ? 'Admin' : 'College'} group message handling complete`,
+        );
+      } 
+      // Handle DM messages
+      else if (chatId && recipientId) {
         const result = await pool.query(
           `INSERT INTO messages (
-              chat_id, sender_id, receiver_id, text,
-              attachment_file_id, attachment_type, attachment_name,
-              reply_to_message_id
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+                chat_id, sender_id, receiver_id, text, 
+                attachment_file_id, attachment_type, attachment_name,
+                reply_to_message_id
+            ) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+             RETURNING *`,
           [
             chatId,
             senderId,
@@ -235,7 +384,7 @@ io.on("connection", (socket) => {
             attachment_type || null,
             attachment_name || null,
             reply_to_message_id || null,
-          ]
+          ],
         );
         const savedMsg = result.rows[0];
         console.log("✅ DM message saved to database:", savedMsg);
@@ -249,12 +398,17 @@ io.on("connection", (socket) => {
             : null,
         };
 
-        // ✅ Send to recipient
+        console.log(
+          "📨 Broadcasting receive_message to chat_" +
+            chatId +
+            " (excluding sender)",
+        );
         socket.broadcast.to(`chat_${chatId}`).emit("receive_message", payload);
 
-        // ✅ Confirm back to sender so temp message gets replaced with real one
+        // ✅ CHANGE 3: Confirm back to sender
         if (callback) callback(payload);
 
+        console.log("📨 Emitting new_notification to user_" + recipientId);
         io.to(`user_${recipientId}`).emit("new_notification", {
           chat_id: chatId,
           sender_id: senderId,
@@ -265,7 +419,7 @@ io.on("connection", (socket) => {
 
         await pool.query(
           "UPDATE chats SET updated_at = NOW() WHERE chat_id = $1",
-          [chatId]
+          [chatId],
         );
         console.log("✅ DM message handling complete");
       }
@@ -274,8 +428,67 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("disconnect", () => {
-    console.log("Socket Disconnected");
+  socket.on("disconnect", async () => {
+    console.log("Socket Disconnected:", socket.id);
+
+    const userId = socket.userId;
+
+    if (userId) {
+      console.log(`📍 Tracking disconnect for user: ${userId}`);
+      try {
+        const { rows } = await pool.query(
+          `
+          SELECT ea.exam_id, ea.end_time, e.disconnect_grace_time
+          FROM exam_attempts ea
+          JOIN exams e ON e.exam_id = ea.exam_id
+          WHERE ea.student_id = $1 
+          AND ea.status = 'in_progress' 
+          AND ea.disconnected_at IS NULL
+          AND NOW() < ea.end_time + (COALESCE(e.disconnect_grace_time, 0) * INTERVAL '1 second')
+          `,
+          [userId]
+        );
+
+        if (rows.length === 0) {
+          console.log(`⚠️ No active in-progress attempts found for user ${userId}`);
+        } else {
+          for (const row of rows) {
+            await pool.query(
+              `
+              UPDATE exam_attempts
+              SET disconnected_at = NOW()
+              WHERE exam_id = $1
+              AND student_id = $2
+              AND status = 'in_progress'
+              `,
+              [row.exam_id, userId]
+            );
+            console.log(`📝 Marked disconnected_at for user ${userId}, exam ${row.exam_id}`);
+          }
+        }
+
+        const { rows: expiredRows } = await pool.query(
+          `
+          SELECT ea.exam_id
+          FROM exam_attempts ea
+          JOIN exams e ON e.exam_id = ea.exam_id
+          WHERE ea.student_id = $1 
+          AND ea.status = 'in_progress'
+          AND NOW() >= ea.end_time + (COALESCE(e.disconnect_grace_time, 0) * INTERVAL '1 second')
+          `,
+          [userId]
+        );
+
+        for (const row of expiredRows) {
+          console.log(`🚨 Auto-submitting expired exam ${row.exam_id} for user ${userId} on disconnect`);
+          await autoSubmitExam(userId, row.exam_id);
+        }
+
+      } catch (err) {
+        console.error("❌ Disconnect handling error:", err);
+        console.error(err.stack);
+      }
+    }
   });
 });
 
